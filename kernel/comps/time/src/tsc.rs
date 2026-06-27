@@ -73,7 +73,9 @@ fn init_timer() {
     // If without KVM, the delayed time will be larger.
     // TODO: This is a temporary solution, and should be modified in the future.
     let max_delay_secs = CLOCK.get().unwrap().max_delay_secs() >> 1;
-    let delay_counts = TIMER_FREQ * max_delay_secs;
+
+    const MAX_REFRESH_TICKS: u64 = TIMER_FREQ / 4; // Cap refresh ticks to satisfy precision requirements of vDSO
+    let delay_counts =  (TIMER_FREQ * max_delay_secs).min(MAX_REFRESH_TICKS);
 
     let update = move || {
         let counter = TSC_UPDATE_COUNTER.fetch_add(1, Ordering::Relaxed);

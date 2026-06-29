@@ -13,7 +13,11 @@
 //! mapped into the address space of every user space process for efficient access.
 
 use alloc::sync::Arc;
-use core::{mem::ManuallyDrop, time::Duration};
+use core::{
+    mem::ManuallyDrop,
+    sync::atomic::{Ordering, fence},
+    time::Duration,
+};
 
 use aster_time::{Instant, read_monotonic_time};
 use aster_util::coeff::Coeff;
@@ -273,10 +277,13 @@ impl Vdso {
 
         data.update_high_res_instant(instant, instant_cycles);
 
+        data.seq = data.seq.wrapping_add(1);
         // Update begins.
         self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &1)
+            .write_once(vdso_data_field_offset!(seq), &data.seq)
             .unwrap();
+
+        fence(Ordering::Release);
 
         self.data_frame
             .write_val(vdso_data_field_offset!(last_cycles), &instant_cycles)
@@ -285,11 +292,12 @@ impl Vdso {
             self.update_data_frame_instant(clock_id, &mut data);
         }
 
+        fence(Ordering::Release);
+
         // Update finishes.
-        // FIXME: To synchronize with the vDSO library, this needs to be an atomic write with the
-        // Release memory order.
+        data.seq = data.seq.wrapping_add(1);
         self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &0)
+            .write_once(vdso_data_field_offset!(seq), &data.seq)
             .unwrap();
     }
 
@@ -298,20 +306,24 @@ impl Vdso {
 
         data.update_coarse_res_instant(instant);
 
+        data.seq = data.seq.wrapping_add(1);
         // Update begins.
         self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &1)
+            .write_once(vdso_data_field_offset!(seq), &data.seq)
             .unwrap();
+
+        fence(Ordering::Release);
 
         for clock_id in COARSE_RES_CLOCK_IDS {
             self.update_data_frame_instant(clock_id, &mut data);
         }
 
+        fence(Ordering::Release);
+
         // Update finishes.
-        // FIXME: To synchronize with the vDSO library, this needs to be an atomic write with the
-        // Release memory order.
+        data.seq = data.seq.wrapping_add(1);
         self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &0)
+            .write_once(vdso_data_field_offset!(seq), &data.seq)
             .unwrap();
     }
 

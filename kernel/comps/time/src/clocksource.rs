@@ -99,7 +99,18 @@ impl ClockSource {
         };
 
         let delta_nanos = {
-            let delta_cycles = instant_cycles - last_cycles;
+            let delta_cycles = match instant_cycles.checked_sub(last_cycles) {
+                Some(delta) => delta,
+                None => {
+                    ostd::warn!(
+                        "The clock source becomes not reliable since TSC \
+                        has moved backwards from {} to {}",
+                        last_cycles,
+                        instant_cycles
+                    );
+                    0
+                }
+            };
             self.cycles_to_nanos_lossy(delta_cycles)
         };
         let duration = Duration::from_nanos(delta_nanos);

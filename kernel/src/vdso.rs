@@ -13,11 +13,7 @@
 //! mapped into the address space of every user space process for efficient access.
 
 use alloc::sync::Arc;
-use core::{
-    mem::ManuallyDrop,
-    sync::atomic::{Ordering, fence},
-    time::Duration,
-};
+use core::{mem::ManuallyDrop, time::Duration};
 
 use aster_time::{Instant, read_monotonic_time};
 use aster_util::coeff::Coeff;
@@ -272,18 +268,33 @@ impl Vdso {
         }
     }
 
+    fn begin_update_data_frame(&self, data: &mut VdsoData) {
+        debug_assert!(data.seq.is_multiple_of(2));
+
+        data.seq = data.seq.wrapping_add(1);
+        self.data_frame
+            .write_once(vdso_data_field_offset!(seq), &data.seq)
+            .unwrap();
+    }
+
+    fn finish_update_data_frame(&self, data: &mut VdsoData) {
+        debug_assert!(!data.seq.is_multiple_of(2));
+
+        data.seq = data.seq.wrapping_add(1);
+        self.data_frame
+            .write_once(vdso_data_field_offset!(seq), &data.seq)
+            .unwrap();
+        // FIXME: To synchronize with the vDSO library, this needs to be an atomic write with the
+        // Release memory order.
+    }
+
     fn update_high_res_instant(&self, instant: Instant, instant_cycles: u64) {
         let mut data = self.data.lock();
 
         data.update_high_res_instant(instant, instant_cycles);
 
-        data.seq = data.seq.wrapping_add(1);
         // Update begins.
-        self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &data.seq)
-            .unwrap();
-
-        fence(Ordering::Release);
+        self.begin_update_data_frame(&mut data);
 
         self.data_frame
             .write_val(vdso_data_field_offset!(last_cycles), &instant_cycles)
@@ -292,13 +303,8 @@ impl Vdso {
             self.update_data_frame_instant(clock_id, &mut data);
         }
 
-        fence(Ordering::Release);
-
         // Update finishes.
-        data.seq = data.seq.wrapping_add(1);
-        self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &data.seq)
-            .unwrap();
+        self.finish_update_data_frame(&mut data);
     }
 
     fn update_coarse_res_instant(&self, instant: Instant) {
@@ -306,25 +312,15 @@ impl Vdso {
 
         data.update_coarse_res_instant(instant);
 
-        data.seq = data.seq.wrapping_add(1);
         // Update begins.
-        self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &data.seq)
-            .unwrap();
-
-        fence(Ordering::Release);
+        self.begin_update_data_frame(&mut data);
 
         for clock_id in COARSE_RES_CLOCK_IDS {
             self.update_data_frame_instant(clock_id, &mut data);
         }
 
-        fence(Ordering::Release);
-
         // Update finishes.
-        data.seq = data.seq.wrapping_add(1);
-        self.data_frame
-            .write_once(vdso_data_field_offset!(seq), &data.seq)
-            .unwrap();
+        self.finish_update_data_frame(&mut data);
     }
 
     /// Updates the requisite fields of the vDSO data in the frame.
